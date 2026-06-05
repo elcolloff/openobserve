@@ -66,10 +66,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
       </div>
     </div>
 
-    <div class="tw:flex-1 tw:flex tw:flex-col">
-      <div class="card-container tw:flex-1 tw:min-h-0 el-border-radius">
-        <div class="tw:flex tw:flex-col tw:h-full">
-          <div class="tw:flex-1 tw:overflow-auto tw:min-h-0">
+    <div class="tw:flex-1 tw:flex tw:flex-col tw:min-w-0">
+      <div class="card-container tw:flex-1 tw:min-h-0 tw:min-w-0 el-border-radius">
+        <div class="tw:flex tw:flex-col tw:h-full tw:min-w-0">
+          <div class="tw:flex-1 tw:overflow-auto tw:min-h-0 tw:min-w-0">
             <router-view />
           </div>
         </div>

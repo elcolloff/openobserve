@@ -14,6 +14,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import { fileURLToPath, URL } from "node:url";
+import { execFileSync } from "node:child_process";
 
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
@@ -82,6 +83,34 @@ function monacoEditorTestResolver() {
   };
 }
 
+// Fetches AI data-source UI markdown from the content repo before Vite starts,
+// so import.meta.glob can bundle it. Covers `vite dev` and every build mode.
+// Builds (CI/prod) force a fresh pull AND fail if it can't be fetched, so we
+// never ship stale or missing content; the dev server stays lenient (uses the
+// cached generated/ dir). Override with DS_CONTENT_STRICT / DS_CONTENT_FORCE.
+// See scripts/fetch-datasource-content.mjs.
+const datasourceContentPlugin = {
+  name: "datasource-content",
+  enforce: "pre" as const,
+  config(_config: any, env: { command: string }) {
+    const isBuild = env?.command === "build";
+    execFileSync(
+      "node",
+      [path.resolve(__dirname, "scripts/fetch-datasource-content.mjs")],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          DS_CONTENT_STRICT:
+            process.env.DS_CONTENT_STRICT ?? (isBuild ? "1" : ""),
+          DS_CONTENT_FORCE:
+            process.env.DS_CONTENT_FORCE ?? (isBuild ? "1" : ""),
+        },
+      },
+    );
+  },
+};
+
 // let filePath = path.resolve(process.cwd(), "src");
 // if (process.env.VITE_OPENOBSERVE_CLOUD === "true") {
 // const filePath = path.resolve(process.cwd(), "src/enterprise");
@@ -118,6 +147,7 @@ export default defineConfig({
         forceBuildInstrument: true,
       }),
     enterpriseResolverPlugin,
+    !isTesting && datasourceContentPlugin,
     Icons({
       compiler: "vue3",
       autoInstall: false,

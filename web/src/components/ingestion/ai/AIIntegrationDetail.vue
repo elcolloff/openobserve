@@ -20,6 +20,8 @@ import CopyContent from "@/components/CopyContent.vue";
 import useIngestion from "@/composables/useIngestion";
 import { aiCategories } from "./data";
 import type { AICategory, AIIntegration } from "./data";
+import { getAICardRaw } from "./content";
+import AIIntegrationCard from "./content/AIIntegrationCard.vue";
 
 const props = defineProps<{
   categorySlug: string;
@@ -40,14 +42,34 @@ const docURL = computed(() => integration.value?.docURL ?? "");
 const displayName = computed(
   () => integration.value?.name ?? props.integrationSlug,
 );
+
+// Rich card markdown sourced from o2-datasource (if this integration has it),
+// otherwise fall back to the legacy 3-line snippet + doc link.
+const cardContent = computed(() =>
+  getAICardRaw(integration.value?.contentSlug ?? integration.value?.slug),
+);
 </script>
 
 <template>
   <div v-if="integration" class="tw:p-2">
-    <div class="tw:text-[16px]">
+    <AIIntegrationCard
+      v-if="cardContent"
+      :content="cardContent"
+      :doc-url="docURL"
+    />
+    <div v-else class="tw:text-[16px]">
       <CopyContent :content="aiContent" />
       <div class="tw:font-bold tw:pt-6 tw:pb-2">
-        Click <a :href="docURL" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600" style="text-decoration: underline">here</a> to check further documentation.
+        Click
+        <a
+          :href="docURL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-blue-500 hover:text-blue-600"
+          style="text-decoration: underline"
+          >here</a
+        >
+        to check further documentation.
       </div>
     </div>
   </div>

@@ -111,18 +111,22 @@ import { aiCategories } from "@/components/ingestion/ai/data";
 
 const useIngestionRoutes = () => {
   const aiIntegrationRoutes = aiCategories.flatMap((category) =>
-    category.integrations.map((integration) => ({
-      path: `${category.slug}/${integration.slug}`,
-      name: integration.routeName,
-      component: AIIntegrationDetail,
-      props: {
-        categorySlug: category.slug,
-        integrationSlug: integration.slug,
-      },
-      beforeEnter(to: any, from: any, next: any) {
-        routeGuard(to, from, next);
-      },
-    })),
+    category.integrations
+      // alias entries (e.g. in the "Popular" tab) reuse another category's
+      // route — don't define a duplicate route for them.
+      .filter((integration) => !integration.alias)
+      .map((integration) => ({
+        path: `${category.slug}/${integration.slug}`,
+        name: integration.routeName,
+        component: AIIntegrationDetail,
+        props: {
+          categorySlug: category.slug,
+          integrationSlug: integration.slug,
+        },
+        beforeEnter(to: any, from: any, next: any) {
+          routeGuard(to, from, next);
+        },
+      })),
   );
 
   const ingestionRoutes: any = [
