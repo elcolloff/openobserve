@@ -22,9 +22,17 @@
 // sections ("Panel implementation notes", "Reference") are dropped.
 
 export interface CardMetadata {
+  /** Card title (from the metadata table, or the H1 as a fallback). */
   displayName?: string;
+  /**
+   * The card's self-declared category BADGE (e.g. "AI / Providers"), shown next
+   * to the title. Display-only — tab placement is a separate concern driven by
+   * the manifest's `category` in data.ts, NOT this value.
+   */
   category?: string;
+  /** One-line tagline under the title. */
   tagline?: string;
+  /** Runtime/prereqs badge (from "Supported runtime" or "Prerequisites"). */
   runtime?: string;
 }
 

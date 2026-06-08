@@ -13,15 +13,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-// Renders a card section's markdown to sanitized HTML, with the user's
-// {url}/{org}/{token} substituted and a copy button injected per code block.
-// The raw (substituted) text of each code block is returned in `codeBlocks`,
-// indexed by the `data-code-idx` on its button — the component copies from
-// that array so the clipboard gets the runnable command, not escaped HTML.
+// Splits a card section's markdown into ordered segments — prose (sanitized
+// HTML) and top-level fenced code blocks — with the user's {url}/{org}/{token}
+// already substituted. The component renders prose via v-html and renders code
+// segments with the shared CopyContent.vue component (same copy affordance as
+// every other ingestion section), which is why code is returned as raw text
+// rather than baked into the HTML.
 
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
-import hljs from "highlight.js";
 
 export interface CardSubstitutions {
   url: string;
@@ -30,10 +30,9 @@ export interface CardSubstitutions {
   token: string;
 }
 
-export interface RenderedMarkdown {
-  html: string;
-  codeBlocks: string[];
-}
+export type CardSegment =
+  | { type: "html"; html: string }
+  | { type: "code"; code: string; lang: string };
 
 function substitute(md: string, subs: CardSubstitutions): string {
   return md
@@ -42,63 +41,43 @@ function substitute(md: string, subs: CardSubstitutions): string {
     .replaceAll("{token}", subs.token);
 }
 
-function highlight(code: string, lang?: string): string {
-  try {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  } catch {
-    // hljs escapes its output; escape manually on the error path.
-    return code
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-}
-
-export function renderCardMarkdown(
+export function renderCardSegments(
   md: string,
   subs: CardSubstitutions,
-): RenderedMarkdown {
+): CardSegment[] {
   const substituted = substitute(md, subs);
-  const codeBlocks: string[] = [];
 
-  // A fresh instance per call keeps the codeBlocks closure local and avoids
-  // mutating the shared `marked` singleton used elsewhere in the app.
+  // Fresh instance so we never mutate the app-wide `marked` singleton.
   const marked = new Marked({ gfm: true, breaks: false });
-  marked.use({
-    renderer: {
-      code({ text, lang }: { text: string; lang?: string }) {
-        // Store the RAW (substituted) code and reference it by index on the
-        // button — the copy handler copies codeBlocks[idx], not the highlighted/
-        // escaped HTML, so the clipboard always gets the runnable command.
-        const idx = codeBlocks.push(text) - 1;
-        const langClass = lang ? ` language-${lang}` : "";
-        const langLabel = lang ? lang : "text";
-        return (
-          `<div class="o2-code-block">` +
-          `<div class="o2-code-toolbar">` +
-          `<span class="o2-code-lang">${langLabel}</span>` +
-          `<button type="button" class="o2-copy-btn" data-code-idx="${idx}" aria-label="Copy code">Copy</button>` +
-          `</div>` +
-          `<pre class="o2-code-pre"><code class="hljs${langClass}">${highlight(text, lang)}</code></pre>` +
-          `</div>`
-        );
-      },
-    },
-  });
+  const tokens = marked.lexer(substituted);
 
-  // `async: false` forces the synchronous overload (our renderer is sync), so
-  // marked.parse always returns a string — DOMPurify never receives a Promise.
-  const rendered = marked.parse(substituted, { async: false });
-  // Sanitize before the component v-html's this (XSS defense for repo-sourced
-  // markdown). DOMPurify strips <script>/on* handlers by default; we only
-  // re-allow our copy <button> and its data-code-idx / aria-label / type attrs.
-  const html = DOMPurify.sanitize(rendered, {
-    ADD_TAGS: ["button"],
-    ADD_ATTR: ["data-code-idx", "aria-label", "type"],
-  });
+  const segments: CardSegment[] = [];
+  let buffer = "";
 
-  return { html, codeBlocks };
+  // Render accumulated non-code markdown into one sanitized HTML segment.
+  const flushProse = () => {
+    if (!buffer.trim()) {
+      buffer = "";
+      return;
+    }
+    // `async: false` forces the sync string overload (no custom async tokens),
+    // and DOMPurify guards the HTML we hand to v-html (XSS defense).
+    const html = DOMPurify.sanitize(marked.parse(buffer, { async: false }));
+    segments.push({ type: "html", html });
+    buffer = "";
+  };
+
+  for (const token of tokens) {
+    // Only TOP-LEVEL fenced code blocks become CopyContent blocks; code nested
+    // inside lists/blockquotes stays inline in the prose.
+    if (token.type === "code") {
+      flushProse();
+      segments.push({ type: "code", code: token.text, lang: token.lang ?? "" });
+    } else {
+      buffer += token.raw;
+    }
+  }
+  flushProse();
+
+  return segments;
 }

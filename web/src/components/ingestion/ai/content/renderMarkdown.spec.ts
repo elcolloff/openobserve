@@ -1,7 +1,7 @@
 // Copyright 2026 OpenObserve Inc.
 
 import { describe, expect, it } from "vitest";
-import { renderCardMarkdown } from "./renderMarkdown";
+import { renderCardSegments } from "./renderMarkdown";
 
 const SUBS = {
   url: "https://api.example.com",
@@ -9,35 +9,47 @@ const SUBS = {
   token: "dG9rZW4=",
 };
 
-describe("renderCardMarkdown", () => {
-  it("substitutes {url}/{org}/{token} placeholders", () => {
-    const md = "```bash\ncurl --url={url} --org={org} --token=\"Basic {token}\"\n```";
-    const { html, codeBlocks } = renderCardMarkdown(md, SUBS);
-    expect(codeBlocks[0]).toContain("--url=https://api.example.com");
-    expect(codeBlocks[0]).toContain("--org=myorg");
-    expect(codeBlocks[0]).toContain('--token="Basic dG9rZW4="');
-    expect(html).not.toContain("{url}");
-    expect(html).not.toContain("{token}");
+describe("renderCardSegments", () => {
+  it("substitutes {url}/{org}/{token} into code segments (raw, for copy)", () => {
+    const segs = renderCardSegments(
+      '```bash\ncurl --url={url} --org={org} --token="Basic {token}"\n```',
+      SUBS,
+    );
+    const code = segs.find((s) => s.type === "code");
+    expect(code).toBeDefined();
+    expect(code?.type === "code" && code.code).toContain(
+      "--url=https://api.example.com",
+    );
+    expect(code?.type === "code" && code.code).toContain("--org=myorg");
+    expect(code?.type === "code" && code.code).toContain('Basic dG9rZW4=');
+    expect(code?.type === "code" && code.lang).toBe("bash");
   });
 
-  it("injects a copy button per code block and collects the raw code", () => {
-    const md = "```bash\necho one\n```\n\n```bash\necho two\n```";
-    const { html, codeBlocks } = renderCardMarkdown(md, SUBS);
-    expect(codeBlocks).toEqual(["echo one", "echo two"]);
-    expect(html).toContain('class="o2-copy-btn"');
-    expect(html).toContain('data-code-idx="0"');
-    expect(html).toContain('data-code-idx="1"');
+  it("splits prose and code into ordered segments", () => {
+    const segs = renderCardSegments(
+      "text before\n\n```bash\necho hi\n```\n\ntext after",
+      SUBS,
+    );
+    expect(segs.map((s) => s.type)).toEqual(["html", "code", "html"]);
+    expect(segs[0].type === "html" && segs[0].html).toContain("text before");
+    expect(segs[2].type === "html" && segs[2].html).toContain("text after");
   });
 
-  it("renders gfm tables and preserves the copy button after sanitization", () => {
-    const md = "| A | B |\n|---|---|\n| 1 | 2 |\n\n```\ncode\n```";
-    const { html } = renderCardMarkdown(md, SUBS);
-    expect(html).toContain("<table");
-    expect(html).toContain("<button");
-  });
-
-  it("does not leak script tags through sanitization", () => {
-    const { html } = renderCardMarkdown("<script>alert(1)</script>\n\ntext", SUBS);
+  it("sanitizes prose HTML (strips script tags)", () => {
+    const segs = renderCardSegments("<script>alert(1)</script>\n\nhello", SUBS);
+    const html = segs
+      .filter((s) => s.type === "html")
+      .map((s) => (s.type === "html" ? s.html : ""))
+      .join("");
     expect(html).not.toContain("<script");
+  });
+
+  it("renders gfm tables inside prose segments", () => {
+    const segs = renderCardSegments("| A | B |\n|---|---|\n| 1 | 2 |", SUBS);
+    const html = segs
+      .filter((s) => s.type === "html")
+      .map((s) => (s.type === "html" ? s.html : ""))
+      .join("");
+    expect(html).toContain("<table");
   });
 });
