@@ -15,17 +15,11 @@ export interface AIIntegration {
   /**
    * Folder slug of the rich card content in o2-datasource
    * (`datasource-ui-content/<contentSlug>/data-source-ui.md`). Set only on
-   * integrations that have a rich card; defaults to `slug` when omitted.
-   * Used to bridge data.ts slugs to content slugs where they differ.
+   * integrations whose catalog `slug` differs from the content folder name
+   * (e.g. `openai-python` → `"openai"`); defaults to `slug` when omitted.
+   * This is the bridge that lets a manifest entry match this catalog entry.
    */
   contentSlug?: string;
-  /**
-   * When true this entry is a display-only shortcut to another category's
-   * integration (it reuses that integration's `routeName`). No route is
-   * generated for it — used by the "Popular" tab to feature integrations that
-   * also live in their own category, without duplicating routes.
-   */
-  alias?: boolean;
 }
 
 export interface AICategory {
@@ -34,6 +28,11 @@ export interface AICategory {
   integrations: AIIntegration[];
 }
 
+// Static catalog of every AI integration (the long tail of basic stubs plus
+// the ones that have rich content). This is the BASE — the exported
+// `aiCategories` at the bottom of the file merges the o2-datasource manifest on
+// top of this (placing/reordering rich cards). Do not import this directly;
+// import `aiCategories`.
 const realCategories: AICategory[] = [
   {
     slug: "frameworks",
