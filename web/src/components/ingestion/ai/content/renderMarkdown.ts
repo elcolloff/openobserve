@@ -70,6 +70,9 @@ export function renderCardMarkdown(
   marked.use({
     renderer: {
       code({ text, lang }: { text: string; lang?: string }) {
+        // Store the RAW (substituted) code and reference it by index on the
+        // button — the copy handler copies codeBlocks[idx], not the highlighted/
+        // escaped HTML, so the clipboard always gets the runnable command.
         const idx = codeBlocks.push(text) - 1;
         const langClass = lang ? ` language-${lang}` : "";
         const langLabel = lang ? lang : "text";
@@ -89,6 +92,9 @@ export function renderCardMarkdown(
   // `async: false` forces the synchronous overload (our renderer is sync), so
   // marked.parse always returns a string — DOMPurify never receives a Promise.
   const rendered = marked.parse(substituted, { async: false });
+  // Sanitize before the component v-html's this (XSS defense for repo-sourced
+  // markdown). DOMPurify strips <script>/on* handlers by default; we only
+  // re-allow our copy <button> and its data-code-idx / aria-label / type attrs.
   const html = DOMPurify.sanitize(rendered, {
     ADD_TAGS: ["button"],
     ADD_ATTR: ["data-code-idx", "aria-label", "type"],
