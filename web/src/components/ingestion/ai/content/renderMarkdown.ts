@@ -86,7 +86,10 @@ export function renderCardMarkdown(
     },
   });
 
-  const html = DOMPurify.sanitize(marked.parse(substituted) as string, {
+  // `async: false` forces the synchronous overload (our renderer is sync), so
+  // marked.parse always returns a string — DOMPurify never receives a Promise.
+  const rendered = marked.parse(substituted, { async: false });
+  const html = DOMPurify.sanitize(rendered, {
     ADD_TAGS: ["button"],
     ADD_ATTR: ["data-code-idx", "aria-label", "type"],
   });

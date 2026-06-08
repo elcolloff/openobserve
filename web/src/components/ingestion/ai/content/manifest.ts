@@ -50,17 +50,19 @@ interface Manifest {
 
 // Glob (rather than a static import) so an absent file in tests / pre-fetch
 // simply yields an empty manifest instead of a build error. This dir also holds
-// `.fetch.json` (our metadata), so pick the file by CONTENT — the one with an
-// `integrations` array — rather than by path. Vite's glob keys differ between
-// dev and build, so matching on the path string is unreliable.
+// `.fetch.json` (our metadata), so we (1) only consider keys ending in
+// `manifest.json` — excluding `.fetch.json` — using endsWith WITHOUT a leading
+// slash (Vite's glob keys differ between dev and build), and (2) still require
+// an `integrations` array as a content guard.
 const files = import.meta.glob(
   "@/assets/ai-datasource-content/generated/*.json",
   { import: "default", eager: true },
 ) as Record<string, Manifest>;
 
-const manifest = Object.values(files).find(
-  (m): m is Manifest => !!m && Array.isArray(m.integrations),
-);
+const manifest = Object.entries(files)
+  .filter(([path]) => path.endsWith("manifest.json"))
+  .map(([, value]) => value)
+  .find((m): m is Manifest => !!m && Array.isArray(m.integrations));
 
 export const manifestIntegrations: ManifestEntry[] = manifest?.integrations ?? [];
 export const manifestCategories: ManifestCategory[] = manifest?.categories ?? [];

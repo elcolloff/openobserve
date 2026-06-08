@@ -14,9 +14,24 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import { fileURLToPath, URL } from "node:url";
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { defineConfig } from "vite";
+
+// Run a child process with inherited stdio (live logs), resolved on success.
+const runNode = (
+  scriptPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const child = spawn("node", [scriptPath], { stdio: "inherit", env });
+    child.on("error", reject);
+    child.on("close", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`fetch-datasource-content exited with ${code}`)),
+    );
+  });
 import vue from "@vitejs/plugin-vue";
 import vueJsx from "@vitejs/plugin-vue-jsx";
 import nodePolyfills from "rollup-plugin-node-polyfills";
@@ -92,20 +107,17 @@ function monacoEditorTestResolver() {
 const datasourceContentPlugin = {
   name: "datasource-content",
   enforce: "pre" as const,
-  config(_config: any, env: { command: string }) {
+  // async so it doesn't block Vite's event loop; the script itself caps each
+  // fetch with a timeout and only retries under DS_CONTENT_STRICT (builds/CI).
+  async config(_config: any, env: { command: string }) {
     const isBuild = env?.command === "build";
-    execFileSync(
-      "node",
-      [path.resolve(__dirname, "scripts/fetch-datasource-content.mjs")],
+    await runNode(
+      path.resolve(__dirname, "scripts/fetch-datasource-content.mjs"),
       {
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          DS_CONTENT_STRICT:
-            process.env.DS_CONTENT_STRICT ?? (isBuild ? "1" : ""),
-          DS_CONTENT_FORCE:
-            process.env.DS_CONTENT_FORCE ?? (isBuild ? "1" : ""),
-        },
+        ...process.env,
+        DS_CONTENT_STRICT:
+          process.env.DS_CONTENT_STRICT ?? (isBuild ? "1" : ""),
+        DS_CONTENT_FORCE: process.env.DS_CONTENT_FORCE ?? (isBuild ? "1" : ""),
       },
     );
   },

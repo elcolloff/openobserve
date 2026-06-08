@@ -39,7 +39,12 @@ const REF = process.env.DS_CONTENT_REF || "main";
 const SUBDIR = process.env.DS_CONTENT_SUBDIR || "datasource-ui-content";
 const FORCE = process.env.DS_CONTENT_FORCE === "1";
 const STRICT = process.env.DS_CONTENT_STRICT === "1";
-const ATTEMPTS = 3;
+// Retry harder for builds/CI (freshness matters); fail fast for the dev server.
+const ATTEMPTS = STRICT ? 3 : 1;
+// Cap each git clone so an unresponsive network can't stall startup/CI.
+const TIMEOUT_MS =
+  Number(process.env.DS_CONTENT_TIMEOUT_MS) || (STRICT ? 60_000 : 30_000);
+const GIT_OPTS = { stdio: "inherit", timeout: TIMEOUT_MS };
 
 const log = (m) => console.log(`[ds-content] ${m}`);
 // `.fetch.json` is our own fetch metadata (sha/time); `manifest.json` is the
@@ -50,15 +55,17 @@ function cloneOnce() {
   const tmp = mkdtempSync(join(tmpdir(), "ds-content-"));
   try {
     // fast path: works for a branch or a tag
-    execFileSync("git", ["clone", "--depth", "1", "--branch", REF, REPO, tmp], {
-      stdio: "inherit",
-    });
+    execFileSync(
+      "git",
+      ["clone", "--depth", "1", "--branch", REF, REPO, tmp],
+      GIT_OPTS,
+    );
   } catch {
     // REF is probably a commit SHA — full clone then checkout
     rmSync(tmp, { recursive: true, force: true });
     mkdirSync(tmp, { recursive: true });
-    execFileSync("git", ["clone", REPO, tmp], { stdio: "inherit" });
-    execFileSync("git", ["-C", tmp, "checkout", REF], { stdio: "inherit" });
+    execFileSync("git", ["clone", REPO, tmp], GIT_OPTS);
+    execFileSync("git", ["-C", tmp, "checkout", REF], GIT_OPTS);
   }
   const sha = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"])
     .toString()
