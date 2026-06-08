@@ -25,6 +25,22 @@ describe("renderCardSegments", () => {
     expect(code?.type === "code" && code.lang).toBe("bash");
   });
 
+  it("does NOT substitute placeholders in prose (only in code)", () => {
+    const segs = renderCardSegments(
+      "Use `{url}` and `{token}` here.\n\n```bash\necho {url}\n```",
+      SUBS,
+    );
+    const prose = segs.find((s) => s.type === "html");
+    expect(prose?.type === "html" && prose.html).toContain("{url}");
+    expect(prose?.type === "html" && prose.html).not.toContain(
+      "https://api.example.com",
+    );
+    const code = segs.find((s) => s.type === "code");
+    expect(code?.type === "code" && code.code).toContain(
+      "echo https://api.example.com",
+    );
+  });
+
   it("splits prose and code into ordered segments", () => {
     const segs = renderCardSegments(
       "text before\n\n```bash\necho hi\n```\n\ntext after",

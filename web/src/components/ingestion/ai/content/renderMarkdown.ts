@@ -14,11 +14,12 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 // Splits a card section's markdown into ordered segments — prose (sanitized
-// HTML) and top-level fenced code blocks — with the user's {url}/{org}/{token}
-// already substituted. The component renders prose via v-html and renders code
-// segments with the shared CopyContent.vue component (same copy affordance as
-// every other ingestion section), which is why code is returned as raw text
-// rather than baked into the HTML.
+// HTML) and top-level fenced code blocks. The user's {url}/{org}/{token} are
+// substituted ONLY inside code blocks (the runnable commands); prose keeps the
+// literal placeholders so the "Substitutions" explanation reads correctly and
+// the base64 token isn't rendered across descriptive text. The component renders
+// prose via v-html and renders code segments with <CodeBlock>, so code is
+// returned as raw text rather than baked into the HTML.
 
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
@@ -45,11 +46,13 @@ export function renderCardSegments(
   md: string,
   subs: CardSubstitutions,
 ): CardSegment[] {
-  const substituted = substitute(md, subs);
-
   // Fresh instance so we never mutate the app-wide `marked` singleton.
   const marked = new Marked({ gfm: true, breaks: false });
-  const tokens = marked.lexer(substituted);
+  // Lex the RAW markdown. We substitute {url}/{org}/{token} ONLY inside code
+  // blocks (the runnable commands), never in prose — so explanatory text like
+  // the "Substitutions" list keeps the placeholder names, and the base64 token
+  // (which decodes to email:password) isn't rendered across the prose.
+  const tokens = marked.lexer(md);
 
   const segments: CardSegment[] = [];
   let buffer = "";
@@ -72,7 +75,11 @@ export function renderCardSegments(
     // inside lists/blockquotes stays inline in the prose.
     if (token.type === "code") {
       flushProse();
-      segments.push({ type: "code", code: token.text, lang: token.lang ?? "" });
+      segments.push({
+        type: "code",
+        code: substitute(token.text, subs), // real values only in runnable code
+        lang: token.lang ?? "",
+      });
     } else {
       buffer += token.raw;
     }
