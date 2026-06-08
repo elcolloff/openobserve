@@ -117,17 +117,19 @@ const renderedSections = computed(() =>
         </template>
       </section>
 
-      <!-- Documentation link -->
-      <div v-if="docUrl" class="tw:mt-6 tw:text-sm">
+      <!-- Documentation link — identical markup to the legacy ingestion cards
+           (AIIntegrationDetail.vue) so it looks the same across all sections. -->
+      <div v-if="docUrl" class="tw:font-bold tw:pt-6 tw:pb-2">
+        Click
         <a
           :href="docUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="tw:text-blue-500 hover:tw:text-blue-600 tw:font-medium tw:inline-flex tw:items-center tw:gap-1"
+          class="text-blue-500 hover:text-blue-600"
+          style="text-decoration: underline"
+          >here</a
         >
-          View full documentation
-          <span aria-hidden="true">→</span>
-        </a>
+        to check further documentation.
       </div>
     </div>
   </div>

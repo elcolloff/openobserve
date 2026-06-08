@@ -3,14 +3,17 @@
 // that Vite bundles via import.meta.glob. See ~/designs/ai-datasource-cards/.
 //
 // Behavior:
-//   - shallow-clones DS_CONTENT_REPO @ DS_CONTENT_REF (retried a few times),
-//     copies <slug>/data-source-ui.md into src/assets/ai-datasource-content/
-//     generated/ + writes manifest.json (resolved SHA)
-//   - skips the fetch when generated/ already exists, unless DS_CONTENT_FORCE=1
-//   - DS_CONTENT_STRICT=1 (set for builds / CI): a failed fetch exits non-zero
-//     so the build fails loudly instead of shipping stale or missing content.
-//     Without strict (dev server), it keeps any cached generated/ content and
-//     otherwise continues — the UI falls back to the basic snippet.
+//   - shallow-clones DS_CONTENT_REPO @ DS_CONTENT_REF (with retries + a per-clone
+//     timeout), then copies <slug>/data-source-ui.md AND the repo's manifest.json
+//     into src/assets/ai-datasource-content/generated/, and writes .fetch.json
+//     (our own metadata: resolved SHA + slug list; distinct from manifest.json).
+//   - skips the fetch when generated/ already exists, unless DS_CONTENT_FORCE=1.
+//   - DS_CONTENT_STRICT=1 (set for builds / CI): a failed fetch (or missing
+//     manifest) exits non-zero so the build fails loudly instead of shipping
+//     stale or missing content. Without strict (dev server) it keeps any cached
+//     generated/ and otherwise continues — the UI falls back to the basic snippet.
+//   - Env knobs: DS_CONTENT_REPO / _REF / _SUBDIR / _FORCE / _STRICT / _TIMEOUT_MS.
+//   - Runnable standalone: `DS_CONTENT_FORCE=1 node scripts/fetch-datasource-content.mjs`.
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
