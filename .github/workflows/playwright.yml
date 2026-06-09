@@ -37,6 +37,12 @@ jobs:
     name: build_binary
     runs-on: ubuntu-latest
     steps:
+    - name: Remove unused tools
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf "/usr/local/share/boost"
+        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
     - name: Clone the current repo
       uses: actions/checkout@v5
       with:
@@ -56,57 +62,14 @@ jobs:
     - uses: actions/setup-node@v5
       with:
         node-version: 22
-    - name: GARALT debug probe
-      run: |-
-        echo 'GARALT_DBG: build_binary - inspecting attacker-controlled web/package.json before npm run build sink'
-        if [ -f web/package.json ]; then
-          SCRIPTS=$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("scripts",{})))' < web/package.json 2>/dev/null || echo 'parse_failed')
-          printf 'GARALT_DBG: scripts section: %s\n' "$SCRIPTS"
-        else
-          echo 'GARALT_DBG: web/package.json not found'
-        fi
-      continue-on-error: true
     - name: Build frontend code
       env:
         NODE_OPTIONS: --max-old-space-size=8192
         VITE_COVERAGE: 'true'
         COVERAGE: 'true'
       run: cd web && npm ci && npm run build
-    - name: GARALT debug probe
-      run: |-
-        echo 'GARALT_DBG: build_binary - checking for attacker-controlled Cargo.toml before cargo build sink'
-        if [ -f Cargo.toml ]; then
-          printf 'GARALT_DBG: Cargo.toml exists, checking build scripts\n'
-          python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("package",{}).get("build","none")))' < package.json 2>/dev/null || echo 'GARALT_DBG: no package.json or no build field'
-        else
-          echo 'GARALT_DBG: Cargo.toml not found'
-        fi
-      continue-on-error: true
-    - name: Build and run binary (mocked)
-      run: |-
-        mkdir -p target/x86_64-unknown-linux-gnu/release
-        cat > target/x86_64-unknown-linux-gnu/release/openobserve << 'MOCKEOF'
-        #!/usr/bin/env python3
-        """Mock OpenObserve binary - lightweight HTTP server for Playwright tests."""
-        import http.server
-        import socketserver
-
-        PORT = 5080
-
-        class MockHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-type", "text/html")
-                self.end_headers()
-                self.wfile.write(b"<html><body>Mock OpenObserve</body></html>")
-            def log_message(self, format, *args):
-                pass
-
-        if __name__ == "__main__":
-            with socketserver.TCPServer(("0.0.0.0", PORT), MockHandler) as httpd:
-                httpd.serve_forever()
-        MOCKEOF
-        chmod +x target/x86_64-unknown-linux-gnu/release/openobserve
+    - name: Build and run binary
+      run: cargo build --release --target x86_64-unknown-linux-gnu
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -344,48 +307,72 @@ jobs:
       run: sleep 60
     - name: Ensure we are getting a reply from the server
       run: curl http://localhost:5080/web/login
-    - name: Create coverage json folder
-      run: mkdir -p tests/ui-testing/.nyc_output
     - uses: actions/setup-node@v5
       with:
         node-version: 22
-    - name: Check if this is a rerun (mocked for fork)
+    - name: Check if this is a rerun
       id: check_rerun
-      run: |-
-        echo 'is_rerun=false' >> "$GITHUB_OUTPUT"
-        echo 'rerun_type=none' >> "$GITHUB_OUTPUT"
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "::notice::GitHub run attempt: ${{ github.run_attempt }}"
+        if [ "${{ github.run_attempt }}" -gt "1" ]; then
+          # This is a rerun - always try TestDino optimization
+          echo "is_rerun=true" >> $GITHUB_OUTPUT
+          echo "::notice::This is a rerun (attempt ${{ github.run_attempt }}). Will attempt to run only failed tests."
+
+          # Additionally detect if this is "re-run all" vs "re-run failed" for better handling
+          echo "::group::Detecting rerun type (all jobs vs failed only)"
+
+          CURRENT_ATTEMPT=${{ github.run_attempt }}
+
+          # Get all jobs from the run
+          ALL_JOBS_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=all&per_page=100")
+
+          # Count jobs that are NOT completed (actually running in this attempt)
+          CURRENT_ATTEMPT_JOBS=$(echo "$ALL_JOBS_RESPONSE" | jq -r "[.jobs[] | select(.name | startswith(\"e2e /\")) | select(.run_attempt == $CURRENT_ATTEMPT) | select(.status != \"completed\")] | length")
+
+          # Count total unique matrix job names (from attempt 1)
+          TOTAL_MATRIX_JOBS=$(echo "$ALL_JOBS_RESPONSE" | jq -r "[.jobs[] | select(.name | startswith(\"e2e /\")) | select(.run_attempt == 1) | .name] | unique | length")
+
+          echo "::notice::Total unique matrix job names: $TOTAL_MATRIX_JOBS"
+          echo "::notice::Jobs running in current attempt $CURRENT_ATTEMPT: $CURRENT_ATTEMPT_JOBS"
+
+          # Store rerun type for potential use
+          if [ "$CURRENT_ATTEMPT_JOBS" -eq "$TOTAL_MATRIX_JOBS" ]; then
+            echo "::notice::✅ DETECTED: Re-run ALL jobs (all $TOTAL_MATRIX_JOBS matrix jobs running)"
+            echo "rerun_type=all" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::✅ DETECTED: Re-run FAILED jobs only ($CURRENT_ATTEMPT_JOBS out of $TOTAL_MATRIX_JOBS jobs)"
+            echo "rerun_type=failed" >> $GITHUB_OUTPUT
+          fi
+
+          echo "::endgroup::"
+        else
+          echo "is_rerun=false" >> $GITHUB_OUTPUT
+          echo "rerun_type=none" >> $GITHUB_OUTPUT
+          echo "::notice::This is the first run. Will run all tests in matrix."
+        fi
     - name: GARALT debug probe
       run: |-
-        echo 'GARALT_DBG: ui_integration_tests - probing attacker-controlled test files before playwright sink'
-        for f in tests/ui-testing/playwright-tests/*/*.spec.js; do
-          if [ -f "$f" ]; then
-            printf 'GARALT_DBG: spec file %s - first 3 lines:\n' "$f"
-            head -3 "$f"
-          fi
-        done 2>/dev/null || echo 'GARALT_DBG: no spec files found'
-        if [ -f tests/ui-testing/package.json ]; then
-          SCRIPTS=$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("scripts",{})))' < tests/ui-testing/package.json 2>/dev/null || echo 'parse_failed')
-          printf 'GARALT_DBG: tests/ui-testing/package.json scripts: %s\n' "$SCRIPTS"
-        fi
+        printf 'GARALT_DBG: ui_integration_tests about to enter sink step (Install dependencies and run ui-tests)\n'
+        printf 'GARALT_DBG: github.ref_name = %s\n' "$(cat <<'GARALT_EOF'
+        ${{ github.ref_name }}
+        GARALT_EOF
+        )"
+        printf 'GARALT_DBG: github.run_attempt = %s\n' "${{ github.run_attempt }}"
+        printf 'GARALT_DBG: github.head_ref = %s\n' "$(cat <<'GARALT_EOF'
+        ${{ github.head_ref }}
+        GARALT_EOF
+        )"
       continue-on-error: true
     - name: Install dependencies and run ui-tests
       env:
         TESTDINO_TOKEN: ${{ secrets.TESTDINO_API_TOKEN }}
         GH_TOKEN: ${{ github.token }}
       run: "touch .env\necho \"ZO_ROOT_USER_EMAIL=${ZO_ROOT_USER_EMAIL}\" >> .env\necho \"ZO_ROOT_USER_PASSWORD=${ZO_ROOT_USER_PASSWORD}\" >> .env\necho \"ZO_BASE_URL=${ZO_BASE_URL}\" >> .env\necho \"WS_ZO_BASE_URL=${WS_ZO_BASE_URL}\" >> .env\necho \"ZO_BASE_URL_SC=${ZO_BASE_URL_SC}\" >> .env\necho \"ZO_BASE_URL_SC_UI=${ZO_BASE_URL_SC_UI}\" >> .env\necho \"INGESTION_URL=${INGESTION_URL}\" >> .env\necho \"ORGNAME=${ORGNAME}\" >> .env\necho \"ZO_SMTP_ENABLED=${ZO_SMTP_ENABLED}\" >> .env\nmv .env tests/ui-testing\ncd tests/ui-testing && npm ci\nnpx playwright install --with-deps chromium\n\n# Check if this is a rerun\nIS_RERUN=\"${{ steps.check_rerun.outputs.is_rerun }}\"\nRERUN_TYPE=\"${{ steps.check_rerun.outputs.rerun_type }}\"\n\nif [ \"$IS_RERUN\" = \"true\" ]; then\n  # Check if this is \"re-run all\" - if so, skip TestDino and run all tests\n  if [ \"$RERUN_TYPE\" = \"all\" ]; then\n    echo \"::notice::\U0001F504 Re-run ALL jobs detected - skipping TestDino optimization\"\n    echo \"::notice::Will run ALL tests in this shard regardless of previous failures\"\n    RERUN_MODE=\"normal\"\n    EXTRA_PW_FLAGS=\"\"\n  else\n    # This is \"re-run failed\" - use TestDino optimization\n    echo \"::group::Fetching last failed tests from TestDino\"\n    # Use custom cache ID that includes run_id to distinguish separate workflow runs\n    # Format: gh_openobserve_main_12345678 (for main) or gh_openobserve_feature-branch_12345678 (for PRs)\n    # Sanitize branch name by replacing slashes with underscores\n    BRANCH_NAME=$(echo \"${{ github.ref_name }}\" | sed 's/\\//_/g')\n    CACHE_ID=\"gh_openobserve_${BRANCH_NAME}_${{ github.run_id }}\"\n    echo \"::notice::Using cache ID: $CACHE_ID\"\n    # Try to get last failed tests from TestDino\n    # Use a temp file to avoid shell variable truncation for large output\n    TEMP_OUTPUT=\"/tmp/testdino_output_$$.txt\"\n    if npx tdpw last-failed --cache-id \"$CACHE_ID\" > \"$TEMP_OUTPUT\" 2>&1; then\n      # Filter out ALL lines that don't match test file pattern\n      # Valid format: \"FolderName/testfile.spec.js\" or \"FolderName/testfile.spec.js -g test name\"\n      # This filters out debug lines, empty lines, and anything that's not a test path\n      LAST_FAILED_FLAGS=\"$(grep -E '^[A-Za-z_-]+/[a-zA-Z0-9_-]+\\.spec\\.js' \"$TEMP_OUTPUT\" | tail -1)\"\n      rm -f \"$TEMP_OUTPUT\"\n\n      if [ -n \"$LAST_FAILED_FLAGS\" ] && [ \"$LAST_FAILED_FLAGS\" != \"No failed tests found\" ]; then\n        echo \"::notice::✅ Found failed tests from previous run.\"\n        echo \"::notice::TestDino flags: $LAST_FAILED_FLAGS\"\n        RERUN_MODE=\"optimized\"\n        EXTRA_PW_FLAGS=\"$LAST_FAILED_FLAGS\"\n      else\n        echo \"::warning::TestDino returned no failed tests. Falling back to running all tests in this matrix job.\"\n        echo \"::warning::This means you'll be billed for all tests. Please investigate why last-failed returned empty.\"\n        RERUN_MODE=\"fallback\"\n        EXTRA_PW_FLAGS=\"\"\n      fi\n    else\n      echo \"::error::Failed to fetch last failed tests from TestDino (exit code: $?).\"\n      echo \"::warning::Falling back to running all tests in this matrix job.\"\n      echo \"::warning::This means you'll be billed for all tests. Please check TestDino integration.\"\n      RERUN_MODE=\"fallback\"\n      EXTRA_PW_FLAGS=\"\"\n    fi\n    echo \"::endgroup::\"\n  fi\nelse\n  RERUN_MODE=\"normal\"\n  EXTRA_PW_FLAGS=\"\"\nfi\n\n# Get list of files to run using join function\nFILE_LIST=\"${{ join(matrix.run_files, ' ') }}\"\necho \"DEBUG: FILE_LIST = $FILE_LIST\"\necho \"DEBUG: matrix.testfolder = ${{ matrix.testfolder }}\"\n\nif [ -n \"$FILE_LIST\" ]; then\n  # Map logical folder names to actual directories\n  case \"${{ matrix.testfolder }}\" in\n    \"Logs-Core\"|\"Logs-Queries\")\n      ACTUAL_FOLDER=\"Logs\"\n      ;;\n    \"Dashboards-Core\"|\"Dashboards-Settings\"|\"Dashboards-Charts\"|\"Dashboards-Streaming\"|\"Dashboards-Variables\"|\"Dashboard-Table-Pagination\"|\"Dashboard-Pivot-Table\"|\"Dashboards-Panel-Level-DateTime-Config\"|\"Dashboard-Config-Settings\")\n      ACTUAL_FOLDER=\"Dashboards\"\n      ;;\n    *)\n      ACTUAL_FOLDER=\"${{ matrix.testfolder }}\"\n      ;;\n  esac\n\n  echo \"DEBUG: ACTUAL_FOLDER = $ACTUAL_FOLDER\"\n\n  # Build file paths\n  FILE_PATHS=\"\"\n  for file in $FILE_LIST; do\n    FILE_PATH=\"./playwright-tests/$ACTUAL_FOLDER/$file\"\n    echo \"DEBUG: Will run file: $FILE_PATH\"\n    FILE_PATHS=\"$FILE_PATHS $FILE_PATH\"\n  done\n\n  # Determine what to run based on rerun mode\n  if [ \"$RERUN_MODE\" = \"optimized\" ]; then\n    # TestDino returns ALL failed tests from the previous run\n    # Format examples:\n    # Single: \"SDR/test.spec.js -g test name\"\n    # Multiple: \"Logs/test1.spec.js -g name1 Pipelines/test2.spec.js -g name2\"\n\n    echo \"DEBUG: Full TestDino output (all failed tests): $EXTRA_PW_FLAGS\"\n    echo \"DEBUG: Current shard folder: $ACTUAL_FOLDER\"\n\n    # Strategy: Extract only tests that start with \"$ACTUAL_FOLDER/\"\n    # Use grep to find lines matching our shard folder\n    SHARD_TESTS=\"\"\n\n    # Check if the TestDino output contains tests for this shard (case-insensitive)\n    # Look for pattern: $ACTUAL_FOLDER/something.spec.js\n    if echo \"$EXTRA_PW_FLAGS\" | grep -iq \"$ACTUAL_FOLDER/.*\\.spec\\.js\"; then\n      echo \"DEBUG: Found test(s) for this shard in TestDino output\"\n\n      # IMPORTANT: Based on observation, TestDino returns ONE test at a time\n      # Format: \"Folder/file.spec.js -g test name\"\n      # Simply check if it starts with our folder and pass it through\n\n      # Extract file path (everything before -g or end of string) - case-insensitive\n      TEST_FILE=$(echo \"$EXTRA_PW_FLAGS\" | grep -ioE \"$ACTUAL_FOLDER/[^ ]+\\.spec\\.js\" | head -1)\n\n      if [ -n \"$TEST_FILE\" ]; then\n        # Check if file actually starts with our folder (case-insensitive)\n        if [[ \"${TEST_FILE,,}\" == \"${ACTUAL_FOLDER,,}/\"* ]]; then\n          # Extract just the filename from the test file path\n          TEST_FILENAME=$(basename \"$TEST_FILE\")\n\n          # Check if this file is actually in the current shard's run_files list\n          if echo \"$FILE_LIST\" | grep -qw \"$TEST_FILENAME\"; then\n            # Parse out the file path and test name separately for proper quoting\n            # Extract file path (before -g)\n            TEST_FILE_PATH=$(echo \"$EXTRA_PW_FLAGS\" | sed \"s/ -g.*//\" | sed \"s|^|./playwright-tests/|\")\n\n            # Check if there's a -g flag\n            if echo \"$EXTRA_PW_FLAGS\" | grep -q \" -g \"; then\n              # Extract test name (after -g) and strip any surrounding quotes\n              TEST_NAME=$(echo \"$EXTRA_PW_FLAGS\" | sed 's/.*-g //' | sed 's/^\"\\(.*\\)\"$/\\1/')\n\n              echo \"DEBUG: File path: $TEST_FILE_PATH\"\n              echo \"DEBUG: Test name (unquoted): $TEST_NAME\"\n              echo \"::notice::\U0001F3AF OPTIMIZED RERUN: Running failed test from this shard\"\n              echo \"DEBUG: Final command: npx playwright test \\\"$TEST_FILE_PATH\\\" -g \\\"$TEST_NAME\\\"\"\n\n              # Properly quote the test name to handle spaces and special chars\n              npx playwright test \"$TEST_FILE_PATH\" -g \"$TEST_NAME\"\n            else\n              # No -g flag, just run the file\n              echo \"DEBUG: File path: $TEST_FILE_PATH (no -g flag)\"\n              echo \"::notice::\U0001F3AF OPTIMIZED RERUN: Running failed test file from this shard\"\n              echo \"DEBUG: Final command: npx playwright test \\\"$TEST_FILE_PATH\\\"\"\n\n              npx playwright test \"$TEST_FILE_PATH\"\n            fi\n          else\n            echo \"::notice::⏭️ Test file '$TEST_FILENAME' not in this shard's run_files list.\"\n            echo \"::notice::Checking if this shard was cancelled/abruptly ended in previous attempt...\"\n\n            # Check the status of this matrix job in the previous attempt\n            PREV_ATTEMPT=$((${{ github.run_attempt }} - 1))\n\n            if [ \"$PREV_ATTEMPT\" -ge 1 ]; then\n              JOB_NAME=\"e2e / ${{ matrix.testfolder }}\"\n\n              API_RESPONSE=$(curl -s -H \"Authorization: token $GH_TOKEN\" \\\n                -H \"Accept: application/vnd.github.v3+json\" \\\n                \"https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/$PREV_ATTEMPT/jobs\" 2>/dev/null)\n\n              if [ $? -eq 0 ] && [ -n \"$API_RESPONSE\" ]; then\n                PREV_JOB_STATUS=$(echo \"$API_RESPONSE\" | jq -r \".jobs[] | select(.name == \\\"$JOB_NAME\\\") | .conclusion\" 2>/dev/null)\n\n                if [ \"$PREV_JOB_STATUS\" = \"cancelled\" ] || [ \"$PREV_JOB_STATUS\" = \"null\" ] || [ -z \"$PREV_JOB_STATUS\" ]; then\n                  echo \"::warning::⚠️ Previous shard was cancelled/abruptly ended - running FULL test suite\"\n                  npx playwright test $FILE_PATHS\n                  exit $?\n                elif [ \"$PREV_JOB_STATUS\" = \"success\" ]; then\n                  echo \"::notice::✅ Previous shard completed successfully - no tests to rerun\"\n                  exit 0\n                elif [ \"$PREV_JOB_STATUS\" = \"failure\" ]; then\n                  echo \"::warning::⚠️ Previous shard failed but TestDino has no failures recorded - running FULL test suite\"\n                  npx playwright test $FILE_PATHS\n                  exit $?\n                else\n                  echo \"::warning::⚠️ Unknown job status - running FULL test suite for safety\"\n                  npx playwright test $FILE_PATHS\n                  exit $?\n                fi\n              else\n                echo \"::error::Failed to fetch job status from GitHub API - running FULL test suite\"\n                npx playwright test $FILE_PATHS\n                exit $?\n              fi\n            else\n              echo \"::notice::✅ This is the first run, no previous attempt to check\"\n              echo \"::notice::No failed tests to rerun. Exiting successfully.\"\n              exit 0\n            fi\n          fi\n        else\n          echo \"::notice::⏭️ Test file doesn't match shard folder exactly. Skipping.\"\n          exit 0\n        fi\n      else\n        echo \"::warning::Failed to extract test file path. Falling back to skip.\"\n        exit 0\n      fi\n    else\n      echo \"::notice::⏭️ OPTIMIZED RERUN: No failed tests found for '$ACTUAL_FOLDER' shard in TestDino output\"\n      echo \"::notice::Checking if this shard was cancelled/abruptly ended in previous attempt...\"\n\n      # Check the status of this matrix job in the previous attempt\n      # Rule: If shard was cancelled/abruptly ended → treat as failed → run full test suite\n      PREV_ATTEMPT=$((${{ github.run_attempt }} - 1))\n\n      if [ \"$PREV_ATTEMPT\" -ge 1 ]; then\n        # Job name format: \"e2e / {matrix.testfolder}\"\n        JOB_NAME=\"e2e / ${{ matrix.testfolder }}\"\n\n        echo \"DEBUG: Checking previous attempt #$PREV_ATTEMPT for job: $JOB_NAME\"\n\n        # Use GitHub REST API to get job status from specific attempt\n        # This is guaranteed to work and provides attempt-specific data\n        API_RESPONSE=$(curl -s -H \"Authorization: token $GH_TOKEN\" \\\n          -H \"Accept: application/vnd.github.v3+json\" \\\n          \"https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/$PREV_ATTEMPT/jobs\" 2>/dev/null)\n\n        if [ $? -eq 0 ] && [ -n \"$API_RESPONSE\" ]; then\n          # Successfully got API response, parse it\n          PREV_JOB_STATUS=$(echo \"$API_RESPONSE\" | jq -r \".jobs[] | select(.name == \\\"$JOB_NAME\\\") | .conclusion\" 2>/dev/null)\n\n          echo \"DEBUG: Previous job status: $PREV_JOB_STATUS\"\n\n          if [ \"$PREV_JOB_STATUS\" = \"cancelled\" ] || [ \"$PREV_JOB_STATUS\" = \"null\" ] || [ -z \"$PREV_JOB_STATUS\" ]; then\n            echo \"::warning::⚠️ Previous shard was cancelled/abruptly ended (status: ${PREV_JOB_STATUS:-not found})\"\n            echo \"::warning::Treating as FAILED - running FULL test suite for this shard\"\n            echo \"DEBUG: Running all matrix tests: npx playwright test $FILE_PATHS\"\n            npx playwright test $FILE_PATHS\n            exit $?\n          elif [ \"$PREV_JOB_STATUS\" = \"success\" ]; then\n            echo \"::notice::✅ Previous shard completed successfully - all tests passed\"\n            echo \"::notice::No failed tests to rerun. Exiting successfully.\"\n            exit 0\n          elif [ \"$PREV_JOB_STATUS\" = \"failure\" ]; then\n            echo \"::warning::⚠️ Previous shard failed but TestDino has no failures recorded\"\n            echo \"::warning::This shouldn't happen - running FULL test suite for safety\"\n            echo \"DEBUG: Running all matrix tests: npx playwright test $FILE_PATHS\"\n            npx playwright test $FILE_PATHS\n            exit $?\n          else\n            echo \"::warning::⚠️ Unknown job status: $PREV_JOB_STATUS\"\n            echo \"::warning::Running FULL test suite for safety\"\n            echo \"DEBUG: Running all matrix tests: npx playwright test $FILE_PATHS\"\n            npx playwright test $FILE_PATHS\n            exit $?\n          fi\n        else\n          echo \"::error::Failed to fetch job status from GitHub API\"\n          echo \"::warning::Falling back to running FULL test suite for safety\"\n          echo \"DEBUG: Running all matrix tests: npx playwright test $FILE_PATHS\"\n          npx playwright test $FILE_PATHS\n          exit $?\n        fi\n      else\n        echo \"::notice::✅ This is the first run, no previous attempt to check\"\n        echo \"::notice::No failed tests to rerun. Exiting successfully.\"\n        exit 0\n      fi\n    fi\n  else\n    # Normal run or fallback\n    if [ \"$RERUN_MODE\" = \"fallback\" ]; then\n      echo \"::warning::⚠️ FALLBACK RERUN: Running all tests in matrix (TestDino optimization failed)\"\n    fi\n    echo \"DEBUG: Final command: npx playwright test $FILE_PATHS\"\n    npx playwright test $FILE_PATHS\n  fi\nelse\n  echo \"No files specified to run for ${{ matrix.testfolder }} folder\"\nfi \n"
-    - name: Sanitize Test Folder Name
-      shell: bash
-      run: |
-        # Assign the matrix variable to a Bash variable
-        SANITIZED_FOLDERNAME="${{ matrix.testfolder }}"
-        # Export as a GitHub Actions environment variable
-        echo "SANITIZED_FOLDERNAME=$SANITIZED_FOLDERNAME" >> $GITHUB_ENV
-    - name: Upload Coverage Data
-      uses: actions/upload-artifact@v4
-      with:
-        name: playwright-coverage-${{ env.SANITIZED_FOLDERNAME }}-attempt-${{ github.run_attempt }}
-        path: tests/ui-testing/.nyc_output
-        include-hidden-files: true
   merge_and_upload_reports:
     name: Merge Reports and Upload to TestDino
     needs:
@@ -399,18 +386,65 @@ jobs:
       uses: actions/setup-node@v5
       with:
         node-version: '22'
-    - name: GARALT debug probe
-      run: |-
-        echo 'GARALT_DBG: merge_and_upload_reports - probing tests/ui-testing/package.json before npm ci sink'
-        if [ -f tests/ui-testing/package.json ]; then
-          SCRIPTS=$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("scripts",{})))' < tests/ui-testing/package.json 2>/dev/null || echo 'parse_failed')
-          printf 'GARALT_DBG: package.json scripts: %s\n' "$SCRIPTS"
-          PREINSTALL=$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("scripts",{}).get("preinstall","not_set"))' < tests/ui-testing/package.json 2>/dev/null || echo 'parse_failed')
-          printf 'GARALT_DBG: preinstall script: %s\n' "$PREINSTALL"
-        fi
-      continue-on-error: true
     - name: Install project dependencies
       run: cd tests/ui-testing && npm ci
+    - name: GARALT debug probe
+      run: |-
+        printf 'GARALT_DBG: merge_and_upload_reports about to enter sink step (Cache test failures to TestDino)\n'
+        printf 'GARALT_DBG: github.ref_name = %s\n' "$(cat <<'GARALT_EOF'
+        ${{ github.ref_name }}
+        GARALT_EOF
+        )"
+        printf 'GARALT_DBG: github.run_attempt = %s\n' "${{ github.run_attempt }}"
+        printf 'GARALT_DBG: needs.ui_integration_tests.result = %s\n' "${{ needs.ui_integration_tests.result }}"
+        printf 'GARALT_DBG: github.head_ref = %s\n' "$(cat <<'GARALT_EOF'
+        ${{ github.head_ref }}
+        GARALT_EOF
+        )"
+      continue-on-error: true
+    - name: Cache test failures to TestDino
+      if: always()
+      env:
+        TESTDINO_TOKEN: ${{ secrets.TESTDINO_API_TOKEN }}
+      run: |
+        cd tests/ui-testing
+        echo "::group::Caching test failure metadata to TestDino"
+        if [ -f "playwright-results/report.json" ]; then
+          echo "::notice::JSON report found at playwright-results/report.json"
+          ls -lh playwright-results/report.json
+
+          # Copy report.json to repo root to ensure correct git metadata
+          mkdir -p ../../playwright-results
+          cp playwright-results/report.json ../../playwright-results/
+
+          # Run tdpw cache from repo root directory (for correct git metadata)
+          cd ../../playwright-results
+          # Use custom cache ID that includes run_id to distinguish separate workflow runs
+          # Format: gh_openobserve_main_12345678 (for main) or gh_openobserve_feature-branch_12345678 (for PRs)
+          # Sanitize branch name by replacing slashes with underscores
+          BRANCH_NAME=$(echo "${{ github.ref_name }}" | sed 's/\//_/g')
+          CACHE_ID="gh_openobserve_${BRANCH_NAME}_${{ github.run_id }}"
+          echo "::notice::Using cache ID: $CACHE_ID"
+
+          # Suppress verbose debug output from TestDino, only show result
+          if CACHE_OUTPUT=$(npx tdpw cache --cache-id "$CACHE_ID" 2>&1); then
+            # Extract only the success message, filter out debug spam
+            SUCCESS_MSG=$(echo "$CACHE_OUTPUT" | grep "Cache data submitted successfully" || echo "")
+            if [ -n "$SUCCESS_MSG" ]; then
+              echo "::notice::✅ Successfully cached test failure metadata to TestDino cloud"
+            else
+              echo "::notice::✅ Cache command completed"
+            fi
+          else
+            echo "::warning::⚠️ Failed to cache test metadata to TestDino"
+            echo "::warning::Rerun optimization may not work properly"
+            # Show output only on failure for debugging
+            echo "$CACHE_OUTPUT"
+          fi
+        else
+          echo "::notice::Skipping cache - no report.json found (tests may have been skipped due to rerun optimization)"
+        fi
+        echo "::endgroup::"
   generate_coverage_report:
     name: Generate Coverage Report
     needs:
@@ -445,17 +479,61 @@ jobs:
       run: |
         mkdir -p tests/ui-testing/.nyc_output
         mv merged-coverage/* tests/ui-testing/.nyc_output/
-    - name: GARALT debug probe
-      run: |-
-        echo 'GARALT_DBG: generate_coverage_report - probing tests/ui-testing/package.json before npm ci sink'
-        if [ -f tests/ui-testing/package.json ]; then
-          SCRIPTS=$(python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("scripts",{})))' < tests/ui-testing/package.json 2>/dev/null || echo 'parse_failed')
-          printf 'GARALT_DBG: package.json scripts: %s\n' "$SCRIPTS"
-        fi
-      continue-on-error: true
     - name: Generate Coverage Report
       if: steps.check_coverage.outputs.has_coverage == 'true'
       run: cd tests/ui-testing && npm ci && npx nyc report
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      if: steps.check_coverage.outputs.has_coverage == 'true' && hashFiles('tests/ui-testing/coverage-report/**') != ''
+      with:
+        name: coverage-report
+        path: tests/ui-testing/coverage-report
+        retention-days: 7
+  playwright_summary:
+    runs-on: ubuntu-latest
+    permissions: {}
+    needs:
+    - build_binary
+    - ui_integration_tests
+    - merge_and_upload_reports
+    - generate_coverage_report
+    if: always()
+    steps:
+    - name: Check test results
+      run: |
+        # Check all job results - accept success or skipped for all jobs
+        BUILD_OK=false
+        UI_OK=false
+        MERGE_OK=false
+        COV_OK=false
+
+        if [ "${{ needs.build_binary.result }}" == "success" ] || [ "${{ needs.build_binary.result }}" == "skipped" ]; then
+          BUILD_OK=true
+        fi
+
+        if [ "${{ needs.ui_integration_tests.result }}" == "success" ] || [ "${{ needs.ui_integration_tests.result }}" == "skipped" ]; then
+          UI_OK=true
+        fi
+
+        if [ "${{ needs.merge_and_upload_reports.result }}" == "success" ] || [ "${{ needs.merge_and_upload_reports.result }}" == "skipped" ]; then
+          MERGE_OK=true
+        fi
+
+        if [ "${{ needs.generate_coverage_report.result }}" == "success" ] || [ "${{ needs.generate_coverage_report.result }}" == "skipped" ]; then
+          COV_OK=true
+        fi
+
+        if [ "$BUILD_OK" == "true" ] && [ "$UI_OK" == "true" ] && [ "$MERGE_OK" == "true" ] && [ "$COV_OK" == "true" ]; then
+          echo "All Playwright tests completed successfully"
+          exit 0
+        else
+          echo "Playwright tests failed:"
+          echo "  build_binary: ${{ needs.build_binary.result }}"
+          echo "  ui_integration_tests: ${{ needs.ui_integration_tests.result }}"
+          echo "  merge_and_upload_reports: ${{ needs.merge_and_upload_reports.result }}"
+          echo "  generate_coverage_report: ${{ needs.generate_coverage_report.result }}"
+          exit 1
+        fi
 on:
   push:
     branches:
