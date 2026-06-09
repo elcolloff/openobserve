@@ -42,6 +42,9 @@ vi.mock("@/services/service_streams", () => ({
       related_streams: { logs: [], metrics: [], traces: [] },
     },
   }),
+  getSemanticGroups: vi.fn().mockResolvedValue({ data: [] }),
+  getDimensionAnalytics: vi.fn().mockResolvedValue({ data: {} }),
+  buildChipDimensionsFromFilters: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("@/utils/dashboard/convertDashboardSchemaVersion", () => ({
