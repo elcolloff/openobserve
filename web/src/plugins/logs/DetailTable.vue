@@ -21,48 +21,44 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
   >
     <!-- Single Tab Row -->
     <div class="tw:flex tw:justify-between tw:pt-2 tw:items-center">
-      <div class="tw:flex tw:items-center tw:gap-2">
-        <OTabs v-model="tab" align="left">
-          <OTab
-            data-test="log-detail-json-tab"
-            name="json"
-            :label="t('common.json')"
-          />
-          <OTab
-            data-test="log-detail-table-tab"
-            name="table"
-            :label="t('common.table')"
-          />
-          <!-- Correlation Tabs (only visible when service streams enabled and enterprise license) -->
-          <OTab
-            data-test="correlated-logs-tab"
-            v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
-            name="correlated-logs"
-            :label="t('correlation.correlatedLogs')"
-          />
-          <OTab
-            data-test="correlated-metrics-tab"
-            v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
-            name="correlated-metrics"
-            :label="t('correlation.correlatedMetrics')"
-          />
-          <OTab
-            data-test="correlated-traces-tab"
-            v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
-            name="correlated-traces"
-            :label="t('correlation.correlatedTraces')"
-          />
-        </OTabs>
+      <OTabs v-model="tab" align="left">
+        <OTab
+          data-test="log-detail-json-tab"
+          name="json"
+          :label="t('common.json')"
+        />
+        <OTab
+          data-test="log-detail-table-tab"
+          name="table"
+          :label="t('common.table')"
+        />
+        <!-- Correlation Tabs (only visible when service streams enabled and enterprise license) -->
+        <OTab
+          data-test="correlated-logs-tab"
+          v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
+          name="correlated-logs"
+          :label="t('correlation.correlatedLogs')"
+        />
+        <OTab
+          data-test="correlated-metrics-tab"
+          v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
+          name="correlated-metrics"
+          :label="t('correlation.correlatedMetrics')"
+        />
+        <OTab
+          data-test="correlated-traces-tab"
+          v-if="serviceStreamsEnabled && config.isEnterprise === 'true'"
+          name="correlated-traces"
+          :label="t('correlation.correlatedTraces')"
+        />
+      </OTabs>
+      <div class="tw:flex tw:items-center tw:gap-2 tw:pr-3 tw:shrink-0">
         <O2AIContextAddBtn
           data-test="logs-detail-ai-context-btn"
           @sendToAiChat="sendToAiChat(JSON.stringify(rowData))"
         />
-      </div>
-      <div
-        v-show="tab === 'table'"
-        class="col-auto tw:flex tw:justify-end align-center tw:pr-3"
-      >
         <OSwitch
+          v-show="tab === 'table'"
           data-test="log-detail-wrap-values-toggle-btn"
           v-model="shouldWrapValues"
           :label="t('common.wrap')"
@@ -78,7 +74,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
     <OTabPanels
       data-test="log-detail-tab-container"
       v-model="tab"
-      animated
       keep-alive
       grow
     >
